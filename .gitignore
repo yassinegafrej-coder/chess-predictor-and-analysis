@@ -1,41 +1,13 @@
-# Virtual environment
 venv/
-.venv/
-env/
-
-# Python cache
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-
-# Jupyter
+*.pyc
+build/
+dist/
+*.spec
 .ipynb_checkpoints/
-
-# Training data (large files)
-mega2600_part_*.pgn
-games.pgn
-
-# Stockfish binary (downloaded separately)
-stockfish/
-
-# IDE and editor files
-.vscode/
-.idea/
-*.swp
-
-# OS files
+__MACOSX/
 .DS_Store
-Thumbs.db
-
-# Backup files
+*.pgn
+stockfish/
 *_backup.py
-*_broken.py
-app_before_sync.py
-chess_before_sync.py
-app_broken.py
-chess_broken.py
-
-# Screenshots folder (optional - remove this line if you want to keep them on GitHub)
-# screenshots/
+img/bg-chess.jpg.jpg
