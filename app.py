@@ -1133,6 +1133,22 @@ section[data-testid="stSidebar"] {{
     box-shadow: 0 0 20px rgba(0, 229, 255, 0.5), inset 0 0 10px rgba(255, 255, 255, 0.3) !important;
     text-shadow: 0 0 8px rgba(255, 255, 255, 0.6) !important;
 }}
+
+/* Hide the Streamlit top header bar */
+header[data-testid="stHeader"] {{
+    display: none !important;
+    height: 0 !important;
+}}
+
+/* Hide the Deploy button specifically */
+.stDeployButton {{
+    display: none !important;
+}}
+
+/* Optional: Hide the hamburger menu icon if the sidebar is collapsed */
+[data-testid="collapsedControl"] {{
+    display: none !important;
+}}
 </style>
 """, unsafe_allow_html=True)
 st.title("♟️ Chess Game Predictor")
