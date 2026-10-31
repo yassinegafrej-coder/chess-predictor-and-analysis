@@ -1,6 +1,1 @@
-[data-testid="collapsedControl"] {{
-    display: none !important;
-}}
-header[data-testid="stHeader"] {{
-    background: rgba(0,0,0,0) !important;
-}}
+
