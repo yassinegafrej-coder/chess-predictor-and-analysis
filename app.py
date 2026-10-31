@@ -14,6 +14,13 @@ import plotly.graph_objects as go
 import base64
 import chess.svg
 
+st.set_page_config(
+    page_title="Chess Predictor",
+    page_icon="♟️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # ---------- UI helper: W/D/B progress bars ----------
 def render_probability_bars(p_white, p_draw, p_black):
     rows = [
@@ -89,7 +96,10 @@ def get_app_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 # ---------- Configuration ----------
-STOCKFISH_PATH = get_app_path(os.path.join("stockfish", "stockfish-windows-x86-64-universal.exe"))
+import shutil
+_bundled_sf = get_app_path(os.path.join("stockfish", "stockfish-windows-x86-64-universal.exe"))
+STOCKFISH_PATH = (_bundled_sf if os.path.exists(_bundled_sf)
+                  else (os.environ.get("STOCKFISH_PATH") or shutil.which("stockfish") or _bundled_sf))
 MODEL_PATH = get_app_path("chess_model.pkl")
 FEATURES_PATH = get_app_path("feature_cols.pkl")
 START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
@@ -216,8 +226,13 @@ def predict_from_pgn(pgn_string, snapshot_ply=80):
     if game is None:
         return {"error": "Could not parse PGN"}
     headers = game.headers
-    white_elo = int(headers.get("WhiteElo", 0) or 0)
-    black_elo = int(headers.get("BlackElo", 0) or 0)
+    def _elo(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+    white_elo = _elo(headers.get("WhiteElo"))
+    black_elo = _elo(headers.get("BlackElo"))
     board = game.board()
     moves = list(game.mainline_moves())
     for i, mv in enumerate(moves):
@@ -240,6 +255,8 @@ def predict_from_fen(fen_string, white_elo, black_elo):
         board = chess.Board(fen_string.strip())
     except ValueError as e:
         return {"error": f"Invalid FEN: {e}"}
+    if not board.is_valid():
+        return {"error": "Illegal position (check kings, side to move and checks)."}
     actual_ply = (board.fullmove_number - 1) * 2 + (0 if board.turn == chess.WHITE else 1)
     if actual_ply < 60 or actual_ply > 100:
         ply = 80
@@ -615,10 +632,12 @@ def compute_eval_graph(pgn_string, max_plies=120, depth=10):
                 best_san = ""
         board.push(mv)
         after_cp = _eval_cp_white_pov(board)
+        _b = max(-1000, min(1000, before_cp))
+        _a = max(-1000, min(1000, after_cp))
         if mover_is_white:
-            cpl = max(0, before_cp - after_cp)
+            cpl = max(0, _b - _a)
         else:
-            cpl = max(0, after_cp - before_cp)
+            cpl = max(0, _a - _b)
         if best_uci and mv.uci() == best_uci:
             cpl = 0
         label, category = classify_cpl(cpl, before_cp, after_cp, mover_is_white)
@@ -658,10 +677,12 @@ def analyze_game_moves(pgn_string, max_plies=120, depth=10):
         best_uci = sf.get_best_move()
         board.push(mv)
         after_cp = _eval_cp_white_pov(board)
+        _b = max(-1000, min(1000, before_cp))
+        _a = max(-1000, min(1000, after_cp))
         if mover_is_white:
-            cpl = max(0, before_cp - after_cp)
+            cpl = max(0, _b - _a)
         else:
-            cpl = max(0, after_cp - before_cp)
+            cpl = max(0, _a - _b)
         if best_uci and mv.uci() == best_uci:
             cpl = 0
         label, category = classify_cpl(cpl, before_cp, after_cp, mover_is_white)
@@ -765,7 +786,75 @@ def render_analysis(r):
 
 
 # ---------- UI ----------
-st.set_page_config(page_title="Chess Predictor", page_icon="♟️", layout="wide")
+# ---------- Sidebar ----------
+st.sidebar.markdown(
+    """
+    <div style="
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        justify-content:center;
+        padding:24px 0 8px 0;
+        text-align:center;
+    ">
+        <div style="
+            font-size:96px;
+            line-height:1;
+            background: linear-gradient(135deg, #22c55e 0%, #a855f7 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            filter: drop-shadow(0 0 18px rgba(34,197,94,0.55))
+                    drop-shadow(0 0 28px rgba(168,85,247,0.35));
+            font-family: 'Segoe UI Symbol', serif;
+        ">♔</div>
+        <div style="
+            margin-top:14px;
+            font-size:1.15rem;
+            font-weight:800;
+            letter-spacing:0.5px;
+            background: linear-gradient(90deg, #22c55e, #a855f7);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        ">CHESS PREDICTOR</div>
+        <div style="
+            margin-top:6px;
+            color:#7d8fa8;
+            font-size:0.78rem;
+            letter-spacing:0.3px;
+        ">ML-powered analysis</div>
+    </div>
+
+    <div style="
+        margin-top:20px;
+        padding:14px;
+        background:#0d1420;
+        border:1px solid #1f2b3d;
+        border-radius:12px;
+        color:#c9d1d9;
+        font-size:0.78rem;
+        line-height:1.6;
+    ">
+        <div style="
+            color:#22c55e;
+            font-weight:700;
+            font-size:0.72rem;
+            text-transform:uppercase;
+            letter-spacing:1px;
+            margin-bottom:8px;
+        ">About</div>
+        Built with <b style="color:#e6edf3;">python-chess</b>,
+        <b style="color:#e6edf3;">Stockfish 19</b>, and
+        <b style="color:#e6edf3;">scikit-learn</b>.<br><br>
+        Trained on <b style="color:#e6edf3;">5,000 master games</b>
+        (2600+ ELO).<br><br>
+        Test accuracy:
+        <b style="color:#22c55e;">~89%</b>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 # ---------- Dark card CSS ----------
 import base64, os
 
@@ -1003,45 +1092,47 @@ section[data-testid="stSidebar"] {{
 }}
 .st-key-view_mode_box label[aria-checked="true"] * {{ color: #ffffff !important; }}
 
-/* Side Filter Radio (All / White / Black) */
-.st-key-side_filter_box_1 [data-testid="stRadio"] > div,
-.st-key-side_filter_box_2 [data-testid="stRadio"] > div {{
-    gap: 8px !important;
+/* View Mode Glowing Pills */
+.st-key-view_mode_unique_v2 [data-testid="stRadio"] > div {{
+    gap: 12px !important;
     display: flex !important;
     flex-direction: row !important;
 }}
-.st-key-side_filter_box_1 label,
-.st-key-side_filter_box_2 label {{
-    background: rgba(10,20,45,0.65) !important;
-    border: 1px solid rgba(96,165,250,0.35) !important;
+
+.st-key-view_mode_unique_v2 label {{
+    background: rgba(10, 20, 45, 0.6) !important;
+    border: 1px solid rgba(96, 165, 250, 0.2) !important;
     border-radius: 50px !important;
-    padding: 6px 16px !important;
+    padding: 8px 24px !important;
     cursor: pointer !important;
     transition: all 0.2s ease !important;
     display: inline-flex !important;
     align-items: center !important;
-    color: #c9d1d9 !important;
-    font-weight: 600 !important;
-    font-size: 0.85rem !important;
+    color: #a0b0c0 !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
 }}
-.st-key-side_filter_box_1 label:hover,
-.st-key-side_filter_box_2 label:hover {{
-    background: rgba(20,35,70,0.85) !important;
-    border-color: rgba(96,165,250,0.6) !important;
-}}
-.st-key-side_filter_box_1 label > div:first-child,
-.st-key-side_filter_box_2 label > div:first-child {{ display: none !important; }}
-.st-key-side_filter_box_1 label:has(input:checked),
-.st-key-side_filter_box_1 label[aria-checked="true"],
-.st-key-side_filter_box_2 label:has(input:checked),
-.st-key-side_filter_box_2 label[aria-checked="true"] {{
-    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
-    border-color: #3b82f6 !important;
+
+.st-key-view_mode_unique_v2 label:hover {{
+    background: rgba(20, 35, 70, 0.9) !important;
+    border-color: rgba(96, 165, 250, 0.5) !important;
     color: #ffffff !important;
-    box-shadow: 0 0 15px rgba(59,130,246,0.55), inset 0 0 10px rgba(96,165,250,0.25) !important;
 }}
-.st-key-side_filter_box_1 label[aria-checked="true"] *,
-.st-key-side_filter_box_2 label[aria-checked="true"] * {{ color: #ffffff !important; }}
+
+/* Hide the default radio circle */
+.st-key-view_mode_unique_v2 label > div:first-child {{
+    display: none !important;
+}}
+
+/* The Selected Glowing State */
+.st-key-view_mode_unique_v2 label:has(input:checked),
+.st-key-view_mode_unique_v2 label[aria-checked="true"] {{
+    background: linear-gradient(135deg, #0055ff, #00e5ff) !important;
+    border: 1px solid #00e5ff !important;
+    color: #ffffff !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.5), inset 0 0 10px rgba(255, 255, 255, 0.3) !important;
+    text-shadow: 0 0 8px rgba(255, 255, 255, 0.6) !important;
+}}
 </style>
 """, unsafe_allow_html=True)
 st.title("♟️ Chess Game Predictor")
@@ -1104,7 +1195,7 @@ with tab_pgn:
                         _b = _h.get("Black", "?")
                         _be = _h.get("BlackElo", "")
                         _r = _h.get("Result", "—")
-                        _n = len(list(_g.mainline_moves()))
+                        _n = (len(list(_g.mainline_moves())) + 1) // 2
                         info_rows = [
                             ("👤", "White", f"{_w}" + (f" ({_we})" if _we else "")),
                             ("👤", "Black", f"{_b}" + (f" ({_be})" if _be else "")),
@@ -1164,7 +1255,7 @@ with tab_pgn:
                     else:
                         gauge_val = r["p_draw"]
                         gauge_label = "Draw expected"
-                        gauge_color = "#8b949e"
+                        gauge_color = "#a855f7"
 
                     g1, g2 = st.columns([1, 1.4])
                     with g1:
@@ -1337,19 +1428,19 @@ with tab_pgn:
                 st.markdown(table_html, unsafe_allow_html=True)
                 st.caption(f"Showing {len(filtered)} of {len(moves)} moves")
 
+            key = [m for m in moves if m["category"] in ("Mistake", "Blunder")]
+            if key:
+                with st.container(border=True):
+                    st.markdown("### 🔴 Key mistakes and blunders")
+                    for m in key:
+                        st.write(f"- Move {m['move_number']} ({m['color']}): "
+                                 f"**{m['san']}** → {m['label']} (lost **{m['cpl']}** cp)")
+            else:
+                st.success("No mistakes or blunders detected! 🎉")
+
             if st.button("🗑️ Clear Analysis", key="clear_analysis"):
                 st.session_state.pop("move_analysis", None)
                 st.rerun()
-
-                key = [m for m in moves if m["category"] in ("Mistake", "Blunder")]
-                if key:
-                    with st.container(border=True):
-                        st.markdown("### 🔴 Key mistakes and blunders")
-                        for m in key:
-                            st.write(f"- Move {m['move_number']} ({m['color']}): "
-                                     f"**{m['san']}** → {m['label']} (lost **{m['cpl']}** cp)")
-                else:
-                    st.success("No mistakes or blunders detected! 🎉")
 
 
 # ============ TAB 2 — FEN ============
@@ -1408,6 +1499,7 @@ with tab_board:
 
     data = bridge("my-bridge")
     if data and isinstance(data, dict) and "fen" in data:
+        st.session_state.bridge_seen = True
         if st.session_state.just_reset:
             st.session_state.just_reset = False
         else:
@@ -1579,7 +1671,9 @@ with tab_board:
                     st.session_state.board_fen = START_FEN
                     st.session_state.last_move_highlight = None
                     st.session_state.current_view_index = -1
-                st.session_state.just_reset = True
+                st.session_state.game_pgn = _rebuild_pgn(st.session_state.moves_list)
+                st.session_state.best_move = None
+                st.session_state.just_reset = st.session_state.get("bridge_seen", False)
                 st.session_state.board_analysis = None
                 st.rerun()
 
@@ -1613,7 +1707,9 @@ with tab_board:
             st.session_state.game_pgn = ""
             st.session_state.moves_list = []
             st.session_state.last_move_highlight = None
-            st.session_state.just_reset = True
+            st.session_state.current_view_index = -1
+            st.session_state.board_review = None
+            st.session_state.just_reset = st.session_state.get("bridge_seen", False)
             st.rerun()
 
     if st.session_state.get("best_move"):
@@ -1652,7 +1748,8 @@ with tab_board:
                     st.session_state.last_move_highlight = w[3]
                     st.session_state.current_view_index = base_idx
                     st.session_state.board_analysis = None
-                    st.session_state.just_reset = True
+                    st.session_state.best_move = None
+                    st.session_state.just_reset = st.session_state.get("bridge_seen", False)
                     st.rerun()
                 if b is not None:
                     if cols[2].button(b[1], key=f"mv_b_{base_idx+1}", use_container_width=True):
@@ -1660,7 +1757,8 @@ with tab_board:
                         st.session_state.last_move_highlight = b[3]
                         st.session_state.current_view_index = base_idx + 1
                         st.session_state.board_analysis = None
-                        st.session_state.just_reset = True
+                        st.session_state.best_move = None
+                        st.session_state.just_reset = st.session_state.get("bridge_seen", False)
                         st.rerun()
 
     # Copy PGN / Send to Review
@@ -2075,12 +2173,33 @@ with tab_review:
             else:
                 st.session_state.review_data = result
                 st.session_state.current_review_ply = 0
+                st.session_state.pop("dash_ply", None)
+                st.session_state.review_source_pgn = review_pgn
 
     graph_data = st.session_state.get("review_data")
+    review_pgn_used = st.session_state.get("review_source_pgn", review_pgn)
+
+    def _pgn_elos(p):
+        try:
+            h = chess.pgn.read_game(io.StringIO(p)).headers
+            return int(h.get("WhiteElo", 0) or 0), int(h.get("BlackElo", 0) or 0)
+        except Exception:
+            return 0, 0
+
+    review_w_elo, review_b_elo = _pgn_elos(review_pgn_used) if graph_data else (0, 0)
 
     if graph_data and "error" not in graph_data:
         evals = graph_data["evals"]
         num_moves = graph_data["num_moves"]
+        fens = graph_data.get("fens", [])
+        cpls = graph_data.get("cpls", [])
+        categories = graph_data.get("categories", [])
+        # ADD THESE 4 LINES SO THE DASHBOARD CAN USE THEM
+        fens = graph_data.get("fens", [])
+        cpls = graph_data.get("cpls", [])
+        categories = graph_data.get("categories", [])
+        sans = graph_data.get("sans", [])
+        best_alts = graph_data.get("best_alts", [])
 
         st.success(f"Analyzed {num_moves} moves.")
         st.divider()
@@ -2209,7 +2328,7 @@ with tab_review:
 
         st.divider()
 
-        opening_name, opening_eco = detect_opening(review_pgn)
+        opening_name, opening_eco = detect_opening(review_pgn_used)
         if opening_name:
             st.markdown(
                 f"<div style='display:inline-flex;align-items:center;gap:12px;"
@@ -2233,15 +2352,425 @@ with tab_review:
             
         with st.container(key="view_mode_box"):
             view_mode = st.radio(
-                "View mode",
-                ["▦  Tabs", "○  Full scroll"],
-                horizontal=True,
-                label_visibility="collapsed",
+            "View mode",
+            ["📊 Dashboard", "▦ Tabs", "◉ Full scroll"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="view_mode_unique_v2",
+        )
+
+        if view_mode.startswith("📊"):
+            import plotly.io as pio
+            import plotly.graph_objects as go
+            
+            # --- HEADER ---
+            st.markdown(
+                "<div style='display:flex; align-items:center; gap:15px; margin-bottom:20px;'>"
+                "<div style='font-size:2.5rem; filter: drop-shadow(0 0 12px rgba(0,229,255,0.8));'>♞</div>"
+                "<div>"
+                "<div style='font-size:2rem; font-weight:900; color:#e6edf3; line-height:1.1; letter-spacing:-0.5px;'>Game Analysis</div>"
+                "<div style='color:#a0b0c0; font-size:1rem; font-weight:500;'>Detailed insights. Better decisions. Stronger games.</div>"
+                "</div></div>",
+                unsafe_allow_html=True
             )
 
-        if view_mode.startswith("▦"):
+            if "dash_ply" not in st.session_state:
+                st.session_state.dash_ply = len(sans) - 1
+
+            max_ply = st.session_state.dash_ply + 1
+            current_evals = evals[:max_ply]
+            current_cpls = cpls[:max_ply]
+            current_categories = categories[:max_ply]
+            current_fens = fens[:max_ply]
+            current_best_alts = best_alts[:max_ply]
+
+            # --- CALCULATIONS ---
+            w_cpls = [current_cpls[i] for i in range(1, len(current_cpls)) if i % 2 == 1]
+            b_cpls = [current_cpls[i] for i in range(1, len(current_cpls)) if i % 2 == 0]
+            w_acc = max(0.0, min(100.0, 100.0 - (sum(w_cpls)/len(w_cpls)/5.0))) if w_cpls else 0
+            b_acc = max(0.0, min(100.0, 100.0 - (sum(b_cpls)/len(b_cpls)/5.0))) if b_cpls else 0
+            max_cpl = max(current_cpls) if current_cpls else 0
+
+            def get_phase_acc(cpls_list, start_ply, end_ply, is_white):
+                phase_cpls = []
+                for i in range(start_ply, min(end_ply, len(cpls_list))):
+                    if is_white and i % 2 == 1: phase_cpls.append(cpls_list[i])
+                    elif not is_white and i % 2 == 0 and i > 0: phase_cpls.append(cpls_list[i])
+                if not phase_cpls: return 0.0
+                return max(0.0, min(100.0, 100.0 - ((sum(phase_cpls) / len(phase_cpls)) / 5.0)))
+
+            w_open, b_open = get_phase_acc(current_cpls, 1, 20, True), get_phase_acc(current_cpls, 1, 20, False)
+            w_mid, b_mid = get_phase_acc(current_cpls, 21, 60, True), get_phase_acc(current_cpls, 21, 60, False)
+            w_end, b_end = get_phase_acc(current_cpls, 61, 999, True), get_phase_acc(current_cpls, 61, 999, False)
+
+            # ML Prediction for Top Row
+            current_fen = current_fens[-1] if current_fens else START_FEN
+            start_fen = current_fens[0] if current_fens else START_FEN
+            ml_current = predict_from_fen(current_fen, review_w_elo or 2600, review_b_elo or 2600)
+            ml_start = predict_from_fen(start_fen, review_w_elo or 2600, review_b_elo or 2600)
+            
+            w_win, b_win, d_prob = ml_current.get("p_white", 0.33) * 100, ml_current.get("p_black", 0.33) * 100, ml_current.get("p_draw", 0.33) * 100
+            w_start, b_start, d_start = ml_start.get("p_white", 0.33) * 100, ml_start.get("p_black", 0.33) * 100, ml_start.get("p_draw", 0.33) * 100
+            
+            def format_delta(delta):
+                if delta > 0.1: return f"<span style='color:#22c55e; text-shadow:0 0 5px rgba(34,197,94,0.8);'>↑ +{delta:.1f}%</span>"
+                elif delta < -0.1: return f"<span style='color:#ff2a2a; text-shadow:0 0 5px rgba(255,42,42,0.8);'>↓ {delta:.1f}%</span>"
+                else: return f"<span style='color:#a0b0c0;'>- 0.0%</span>"
+
+            def get_spark_svg(probs, color):
+                recent = probs[-25:] if len(probs) > 25 else probs
+                if not recent: return ""
+                pts = [f"{(i / max(1, len(recent)-1)) * 60:.1f},{30 - (p / 100) * 30:.1f}" for i, p in enumerate(recent)]
+                return f"<svg width='70' height='40' viewBox='0 0 70 40'><polygon points='0,30 {' '.join(pts)} 60,30' fill='{color}' opacity='0.15' /><polyline points='{' '.join(pts)}' fill='none' stroke='{color}' stroke-width='2.5' stroke-linejoin='round' stroke-linecap='round' style='filter: drop-shadow(0 0 6px {color});'/></svg>"
+
+            w_pts = get_spark_svg([eval_to_win_prob(v) * 100 for v in current_evals], "#22c55e")
+            b_pts = get_spark_svg([eval_to_win_prob(-v) * 100 for v in current_evals], "#3b82f6")
+            d_pts = get_spark_svg([max(0.0, 40.0 * (1 - min(1.0, abs(v) / 500.0))) for v in current_evals], "#a855f7")
+
+            # --- 1. TOP ROW: PREDICTION CARDS ---
+            cards_html = f"""
+            <div style='display:grid; grid-template-columns: repeat(3, 1fr); gap:15px; margin-bottom:20px;'>
+                <div style='background:linear-gradient(135deg, rgba(34,197,94,0.15) 0%, rgba(5,10,25,0.95) 100%); border:1px solid rgba(34,197,94,0.6); border-radius:16px; padding:18px; display:flex; align-items:center; justify-content:space-between; box-shadow: 0 0 20px rgba(34,197,94,0.2);'>
+                    <div style='display:flex; align-items:center; gap:15px;'>
+                        <div style='width:50px; height:50px; border-radius:50%; background:rgba(34,197,94,0.2); display:flex; align-items:center; justify-content:center; font-size:1.4rem; border:1px solid rgba(34,197,94,0.8);'>♘</div>
+                        <div><div style='color:#fff; font-size:0.8rem; font-weight:900; letter-spacing:1px;'>WHITE WIN</div><div style='color:#22c55e; font-size:2rem; font-weight:900; text-shadow:0 0 12px rgba(34,197,94,0.8); line-height:1.1;'>{w_win:.1f}%</div><div style='font-size:0.75rem; font-weight:800;'>{format_delta(w_win - w_start)} <span style='color:#a0b0c0;'>vs start</span></div></div>
+                    </div>
+                    {w_pts}
+                </div>
+                <div style='background:linear-gradient(135deg, rgba(59,130,246,0.15) 0%, rgba(5,10,25,0.95) 100%); border:1px solid rgba(59,130,246,0.6); border-radius:16px; padding:18px; display:flex; align-items:center; justify-content:space-between; box-shadow: 0 0 20px rgba(59,130,246,0.2);'>
+                    <div style='display:flex; align-items:center; gap:15px;'>
+                        <div style='width:50px; height:50px; border-radius:50%; background:rgba(59,130,246,0.2); display:flex; align-items:center; justify-content:center; font-size:1.4rem; border:1px solid rgba(59,130,246,0.8);'>♞</div>
+                        <div><div style='color:#fff; font-size:0.8rem; font-weight:900; letter-spacing:1px;'>BLACK WIN</div><div style='color:#3b82f6; font-size:2rem; font-weight:900; text-shadow:0 0 12px rgba(59,130,246,0.8); line-height:1.1;'>{b_win:.1f}%</div><div style='font-size:0.75rem; font-weight:800;'>{format_delta(b_win - b_start)} <span style='color:#a0b0c0;'>vs start</span></div></div>
+                    </div>
+                    {b_pts}
+                </div>
+                <div style='background:linear-gradient(135deg, rgba(168,85,247,0.15) 0%, rgba(5,10,25,0.95) 100%); border:1px solid rgba(168,85,247,0.6); border-radius:16px; padding:18px; display:flex; align-items:center; justify-content:space-between; box-shadow: 0 0 20px rgba(168,85,247,0.2);'>
+                    <div style='display:flex; align-items:center; gap:15px;'>
+                        <div style='width:50px; height:50px; border-radius:50%; background:rgba(168,85,247,0.2); display:flex; align-items:center; justify-content:center; font-size:1.4rem; border:1px solid rgba(168,85,247,0.8);'>🤝</div>
+                        <div><div style='color:#fff; font-size:0.8rem; font-weight:900; letter-spacing:1px;'>DRAW</div><div style='color:#a855f7; font-size:2rem; font-weight:900; text-shadow:0 0 12px rgba(168,85,247,0.8); line-height:1.1;'>{d_prob:.1f}%</div><div style='font-size:0.75rem; font-weight:800;'>{format_delta(d_prob - d_start)} <span style='color:#a0b0c0;'>vs start</span></div></div>
+                    </div>
+                    {d_pts}
+                </div>
+            </div>
+            """
+            components.html(cards_html, height=140, scrolling=False)
+
+            # --- 2. MAIN LAYOUT: MOVES LEFT, DASHBOARD RIGHT ---
+            col_moves, col_main = st.columns([1.1, 3.9], gap="medium")
+
+            with col_moves:
+                with st.container(border=True):
+                    st.markdown("<div style='color:#e6edf3; font-weight:800; font-size:0.85rem; margin-bottom:10px; text-transform:uppercase; letter-spacing:1px;'>Moves</div>", unsafe_allow_html=True)
+                    
+                    # Custom CSS for a sleek, thin scrollbar
+                    st.markdown("""
+                    <style>
+                    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock"] > div[style*="overflow-y: auto"]::-webkit-scrollbar {
+                        width: 6px;
+                    }
+                    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock"] > div[style*="overflow-y: auto"]::-webkit-scrollbar-track {
+                        background: transparent; 
+                    }
+                    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock"] > div[style*="overflow-y: auto"]::-webkit-scrollbar-thumb {
+                        background: rgba(239, 68, 68, 0.6); 
+                        border-radius: 10px;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+
+                    # Scrollable container for the move list
+                    with st.container(height=650):
+                        # Start position button
+                        if st.button("Start Position", use_container_width=True, type="primary" if st.session_state.dash_ply == 0 else "secondary"):
+                            st.session_state.dash_ply = 0
+                            st.rerun()
+                            
+                        # Generate move pairs (White & Black)
+                        st.markdown("""
+                        <style>
+                        /* Style for White move buttons */
+                        div[class^="st-key-white_move_"] button[kind="secondary"] {
+                            background-color: rgba(255, 255, 255, 0.08) !important;
+                            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+                            color: #ffffff !important;
+                        }
+                        /* Style for Black move buttons */
+                        div[class^="st-key-black_move_"] button[kind="secondary"] {
+                            background-color: rgba(10, 15, 30, 0.7) !important;
+                            border: 1px solid rgba(255, 255, 255, 0.05) !important;
+                            color: #a0b0c0 !important;
+                        }
+                        /* Make sure the selected move remains glowing cyan */
+                        div[class^="st-key-white_move_"] button[kind="primary"],
+                        div[class^="st-key-black_move_"] button[kind="primary"] {
+                            background: linear-gradient(135deg, #0055ff, #00e5ff) !important;
+                            border: 1px solid #00e5ff !important;
+                            color: #ffffff !important;
+                            box-shadow: 0 0 15px rgba(0, 229, 255, 0.6) !important;
+                        }
+                        </style>
+                        """, unsafe_allow_html=True)
+                        
+                        for i in range(1, len(sans), 2):
+                            move_num = (i + 1) // 2
+                            
+                            c_num, c_w, c_b = st.columns([0.4, 1, 1])
+                            c_num.markdown(f"<div style='color:#7d8fa8; font-size:0.85rem; margin-top:8px; text-align:right;'>{move_num}.</div>", unsafe_allow_html=True)
+                            
+                            # White move
+                            w_ply = i
+                            w_san = sans[w_ply]
+                            w_cat = current_categories[w_ply] if w_ply < len(current_categories) else ""
+                            w_icon = "💥" if w_cat == "Blunder" else ("❌" if w_cat == "Mistake" else ("⚠️" if w_cat == "Inaccuracy" else ""))
+                            
+                            with c_w:
+                                with st.container(key=f"white_move_{w_ply}"):
+                                    if st.button(f"⚪ {w_san} {w_icon}", key=f"w_{w_ply}", use_container_width=True, type="primary" if st.session_state.dash_ply == w_ply else "secondary"):
+                                        st.session_state.dash_ply = w_ply
+                                        st.rerun()
+                                        
+                            # Black move
+                            b_ply = i + 1
+                            if b_ply < len(sans):
+                                b_san = sans[b_ply]
+                                b_cat = current_categories[b_ply] if b_ply < len(current_categories) else ""
+                                b_icon = "💥" if b_cat == "Blunder" else ("❌" if b_cat == "Mistake" else ("⚠️" if b_cat == "Inaccuracy" else ""))
+                                
+                                with c_b:
+                                    with st.container(key=f"black_move_{b_ply}"):
+                                        if st.button(f"⚫ {b_san} {b_icon}", key=f"b_{b_ply}", use_container_width=True, type="primary" if st.session_state.dash_ply == b_ply else "secondary"):
+                                            st.session_state.dash_ply = b_ply
+                                            st.rerun()
+                            else:
+                                c_b.write("")
+
+            with col_main:
+                # --- 3. MIDDLE ROW ---
+                mid_col1, mid_col2, mid_col3 = st.columns([1.6, 1, 1], gap="medium")
+
+                with mid_col1:
+                    with st.container(border=True):
+                        st.markdown("<div style='color:#e6edf3; font-weight:900; font-size:1.1rem; margin-bottom:10px;'>📈 Game Momentum</div>", unsafe_allow_html=True)
+                        x = list(range(len(current_evals)))
+                        y = [max(-800, min(800, v)) for v in current_evals]
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=x, y=[max(0, v) for v in y], mode="lines", line=dict(color="#00e5ff", width=3), fill="tozeroy", fillcolor="rgba(0, 229, 255, 0.15)"))
+                        fig.add_trace(go.Scatter(x=x, y=[min(0, v) for v in y], mode="lines", line=dict(color="#ff2a2a", width=3), fill="tozeroy", fillcolor="rgba(255, 42, 42, 0.15)"))
+                        fig.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", showlegend=False, xaxis=dict(visible=False), yaxis=dict(visible=False, range=[-850, 850]))
+                        _js_glow = "setTimeout(function() { var plot = document.querySelector('.js-plotly-plot'); if (!plot) return; var traces = plot.querySelectorAll('.scatterlayer .trace'); if (traces.length >= 1) { traces[0].querySelectorAll('.js-line').forEach(function(l) { l.style.filter = 'drop-shadow(0 0 8px rgba(0, 229, 255, 0.8))'; }); } if (traces.length >= 2) { traces[1].querySelectorAll('.js-line').forEach(function(l) { l.style.filter = 'drop-shadow(0 0 8px rgba(255, 42, 42, 0.8))'; }); } }, 500);"
+                        html_fig = pio.to_html(fig, include_plotlyjs='cdn', full_html=False, config={'displayModeBar': False}, post_script=_js_glow)
+                        components.html(html_fig, height=230, scrolling=False)
+
+                with mid_col2:
+                    with st.container(border=True):
+                        w_circ, b_circ = 2 * 3.14159 * 30, 2 * 3.14159 * 30
+                        w_dash, b_dash = (w_acc / 100) * w_circ, (b_acc / 100) * b_circ
+                        
+                        acc_html = f"""
+                        <div style='display:flex; flex-direction:column;'>
+                            <div style='display:flex; align-items:center; gap:12px; margin-bottom:15px;'>
+                                <div style='width:42px; height:42px; border-radius:50%; background:rgba(0,150,255,0.1); border:1px solid #00e5ff; display:flex; align-items:center; justify-content:center; font-size:1.2rem; box-shadow:0 0 15px rgba(0,229,255,0.4);'>🎯</div>
+                                <div><div style='color:#ffffff; font-weight:900; font-size:1.3rem; text-shadow: 0 0 10px rgba(255,255,255,0.5);'>Accuracy</div><div style='color:#ffffff; font-size:0.85rem; font-weight:800; opacity:0.9;'>White vs Black by Phase</div></div>
+                            </div>
+                            <div style='display:flex; justify-content:space-around; margin-bottom:20px;'>
+                                <div style='display:flex; flex-direction:column; align-items:center;'>
+                                    <svg width='90' height='90' viewBox='0 0 80 80'>
+                                        <defs><linearGradient id='wGrad' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='#00e5ff' /><stop offset='100%' stop-color='#0055ff' /></linearGradient></defs>
+                                        <circle cx='40' cy='40' r='30' stroke='rgba(0,229,255,0.1)' stroke-width='8' fill='none' />
+                                        <circle cx='40' cy='40' r='30' stroke='url(#wGrad)' stroke-width='8' fill='none' stroke-dasharray='{w_dash} {w_circ}' transform='rotate(-90 40 40)' stroke-linecap='round' style='filter: drop-shadow(0 0 8px #00e5ff);' />
+                                        <text x='40' y='40' text-anchor='middle' dominant-baseline='central' fill='#ffffff' font-size='18' font-weight='900' font-family='sans-serif' style='filter: drop-shadow(0 0 4px #fff);'>{w_acc:.1f}%</text>
+                                    </svg>
+                                    <div style='color:#ffffff; font-weight:900; font-size:0.95rem; margin-top:5px; text-shadow: 0 0 8px rgba(0,229,255,0.8);'>White</div>
+                                </div>
+                                <div style='display:flex; flex-direction:column; align-items:center;'>
+                                    <svg width='90' height='90' viewBox='0 0 80 80'>
+                                        <defs><linearGradient id='bGrad' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='#ff2a2a' /><stop offset='100%' stop-color='#991b1b' /></linearGradient></defs>
+                                        <circle cx='40' cy='40' r='30' stroke='rgba(255,42,42,0.1)' stroke-width='8' fill='none' />
+                                        <circle cx='40' cy='40' r='30' stroke='url(#bGrad)' stroke-width='8' fill='none' stroke-dasharray='{b_dash} {b_circ}' transform='rotate(-90 40 40)' stroke-linecap='round' style='filter: drop-shadow(0 0 8px #ff2a2a);' />
+                                        <text x='40' y='40' text-anchor='middle' dominant-baseline='central' fill='#ffffff' font-size='18' font-weight='900' font-family='sans-serif' style='filter: drop-shadow(0 0 4px #fff);'>{b_acc:.1f}%</text>
+                                    </svg>
+                                    <div style='color:#ffffff; font-weight:900; font-size:0.95rem; margin-top:5px; text-shadow: 0 0 8px rgba(255,42,42,0.8);'>Black</div>
+                                </div>
+                            </div>
+                            <div style='width:100%; display:flex; flex-direction:column; gap:12px;'>
+                                <div><div style='display:flex; justify-content:space-between; color:#ffffff; font-weight:900; font-size:0.8rem; margin-bottom:4px;'><span>Opening</span><span><span style='color:#00e5ff;'>W: {w_open:.1f}%</span> | <span style='color:#ff2a2a;'>B: {b_open:.1f}%</span></span></div><div style='background:#0b132b; border-radius:4px; height:6px; margin-bottom:4px;'><div style='background:#00e5ff; width:{w_open}%; height:100%; border-radius:4px; box-shadow:0 0 8px #00e5ff;'></div></div><div style='background:#0b132b; border-radius:4px; height:6px;'><div style='background:#ff2a2a; width:{b_open}%; height:100%; border-radius:4px; box-shadow:0 0 8px #ff2a2a;'></div></div></div>
+                                <div><div style='display:flex; justify-content:space-between; color:#ffffff; font-weight:900; font-size:0.8rem; margin-bottom:4px;'><span>Middlegame</span><span><span style='color:#00e5ff;'>W: {w_mid:.1f}%</span> | <span style='color:#ff2a2a;'>B: {b_mid:.1f}%</span></span></div><div style='background:#0b132b; border-radius:4px; height:6px; margin-bottom:4px;'><div style='background:#00e5ff; width:{w_mid}%; height:100%; border-radius:4px; box-shadow:0 0 8px #00e5ff;'></div></div><div style='background:#0b132b; border-radius:4px; height:6px;'><div style='background:#ff2a2a; width:{b_mid}%; height:100%; border-radius:4px; box-shadow:0 0 8px #ff2a2a;'></div></div></div>
+                                <div><div style='display:flex; justify-content:space-between; color:#ffffff; font-weight:900; font-size:0.8rem; margin-bottom:4px;'><span>Endgame</span><span><span style='color:#00e5ff;'>W: {w_end:.1f}%</span> | <span style='color:#ff2a2a;'>B: {b_end:.1f}%</span></span></div><div style='background:#0b132b; border-radius:4px; height:6px; margin-bottom:4px;'><div style='background:#00e5ff; width:{w_end}%; height:100%; border-radius:4px; box-shadow:0 0 8px #00e5ff;'></div></div><div style='background:#0b132b; border-radius:4px; height:6px;'><div style='background:#ff2a2a; width:{b_end}%; height:100%; border-radius:4px; box-shadow:0 0 8px #ff2a2a;'></div></div></div>
+                            </div>
+                        </div>
+                        """
+                        components.html(acc_html, height=380, scrolling=False)
+
+                with mid_col3:
+                    with st.container(border=True):
+                        # Header
+                        st.markdown(
+                            "<div style='display:flex; align-items:center; gap:12px; margin-bottom: 10px;'>"
+                            "<div style='width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg, #3b82f6, #00e5ff); display:flex; align-items:center; justify-content:center; box-shadow: 0 0 12px rgba(0,229,255,0.4);'>"
+                            "<span style='font-size:1.2rem; color:#fff;'>♟️</span>"
+                            "</div>"
+                            "<div>"
+                            "<div style='color:#e6edf3; font-weight:800; font-size:1.05rem; line-height:1.1;'>Board Position</div>"
+                            "<div style='color:#7d8fa8; font-size:0.75rem; margin-top:2px;'>Current move</div>"
+                            "</div>"
+                            "</div>",
+                            unsafe_allow_html=True
+                        )
+
+                        # Render the board dynamically based on the selected move
+                        try:
+                            board_obj = chess.Board(current_fens[-1])
+                            # Size 320 fits nicely in this column
+                            svg_str = chess.svg.board(board_obj, size=320) 
+                            svg_b64 = base64.b64encode(svg_str.encode("utf-8")).decode("utf-8")
+                            
+                            st.markdown(
+                                f"<div style='border-radius:10px; overflow:hidden; box-shadow:0 0 20px rgba(0,229,255,0.15); border: 1px solid rgba(255,255,255,0.1);'>"
+                                f"<img src='data:image/svg+xml;base64,{svg_b64}' width='100%' />"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
+                        except Exception as e:
+                            st.error(f"Could not render board: {e}")
+                # --- 4. BOTTOM ROW: KING SAFETY & MOVE QUALITY ---
+                st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
+                
+                bot_col1, bot_col2 = st.columns([1, 1.2], gap="medium")
+                
+                # --- Left Side: King Safety ---
+                with bot_col1:
+                    with st.container(border=True):
+                        # Header
+                        st.markdown(
+                            "<div style='display:flex; align-items:center; gap:12px; margin-bottom: 5px;'>"
+                            "<div style='width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg, #facc15, #d97706); display:flex; align-items:center; justify-content:center; box-shadow: 0 0 12px rgba(250,204,21,0.4);'>"
+                            "<span style='font-size:1.2rem; color:#fff;'>👑</span>"
+                            "</div>"
+                            "<div>"
+                            "<div style='color:#e6edf3; font-weight:800; font-size:1.05rem; line-height:1.1;'>King Safety</div>"
+                            "<div style='color:#7d8fa8; font-size:0.75rem; margin-top:2px;'>Your king's safety over time</div>"
+                            "</div>"
+                            "</div>",
+                            unsafe_allow_html=True
+                        )
+
+                        # Chart Data
+                        w_safety, b_safety = king_safety_timeline(current_fens)
+                        if w_safety and b_safety and w_safety[-1] + 1 < b_safety[-1]:
+                            _ks_tip = "White's king is currently less safe than Black's."
+                        elif w_safety and b_safety and b_safety[-1] + 1 < w_safety[-1]:
+                            _ks_tip = "Black's king is currently less safe than White's."
+                        else:
+                            _ks_tip = "Both kings are similarly safe."
+                        x_ks = list(range(len(w_safety)))
+                        max_y = max(max(w_safety, default=10), max(b_safety, default=10), 10)
+                        
+                        fig_ks_mini = go.Figure()
+                        
+                        # White King (Cyan, smooth spline, soft shaded area)
+                        fig_ks_mini.add_trace(go.Scatter(
+                            x=x_ks, y=w_safety, mode="lines",
+                            line_shape='spline', # Smooths the line
+                            line=dict(color="#00e5ff", width=2.5),
+                            fill="tozeroy", fillcolor="rgba(0, 229, 255, 0.06)", # Softer shaded area
+                            hoverinfo="skip"
+                        ))
+                        
+                        # Black King (Red, smooth spline, soft shaded area)
+                        fig_ks_mini.add_trace(go.Scatter(
+                            x=x_ks, y=b_safety, mode="lines",
+                            line_shape='spline', # Smooths the line
+                            line=dict(color="#ff2a2a", width=2.5),
+                            fill="tozeroy", fillcolor="rgba(255, 42, 42, 0.06)", # Softer shaded area
+                            hoverinfo="skip"
+                        ))
+                        
+                        fig_ks_mini.update_layout(
+                            height=180, 
+                            margin=dict(l=10, r=10, t=10, b=10),
+                            plot_bgcolor="rgba(0,0,0,0)", 
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            showlegend=False, 
+                            xaxis=dict(visible=False), 
+                            yaxis=dict(visible=False, range=[0, max_y * 1.2])
+                        )
+                        
+                        # Refined Subtle Glow Effect
+                        _js_glow_ks = """
+                        setTimeout(function() { 
+                            var plot = document.querySelector('.js-plotly-plot'); 
+                            if (!plot) return; 
+                            var traces = plot.querySelectorAll('.scatterlayer .trace'); 
+                            if (traces.length >= 1) { 
+                                traces[0].querySelectorAll('.js-line').forEach(function(l) { 
+                                    l.style.filter = 'drop-shadow(0 0 4px rgba(0, 229, 255, 0.7))'; 
+                                }); 
+                            } 
+                            if (traces.length >= 2) { 
+                                traces[1].querySelectorAll('.js-line').forEach(function(l) { 
+                                    l.style.filter = 'drop-shadow(0 0 4px rgba(255, 42, 42, 0.7))'; 
+                                }); 
+                            } 
+                        }, 500);
+                        """
+                        
+                        html_fig_ks = pio.to_html(fig_ks_mini, include_plotlyjs='cdn', full_html=False, config={'displayModeBar': False}, post_script=_js_glow_ks)
+                        components.html(html_fig_ks, height=190, scrolling=False)
+                        
+                        # Tip Box
+                        st.markdown(
+                            "<div style='background:rgba(250,204,21,0.1); border:1px solid rgba(250,204,21,0.3); "
+                            "border-radius:8px; padding:10px; font-size:0.75rem; color:#c9d1d9; margin-top:5px;'>"
+                            "<b style='color:#facc15;'>💡 Tip:</b> " + _ks_tip + "</div>", 
+                            unsafe_allow_html=True
+                        )
+
+                # --- Right Side: Move Quality ---
+                with bot_col2:
+                    with st.container(border=True):
+                        st.markdown("<div style='color:#e6edf3; font-weight:900; font-size:1.1rem; margin-bottom:20px;'>📊 Move Quality Distribution</div>", unsafe_allow_html=True)
+                        
+                        cats = ["Best", "Excellent", "Good", "Inaccuracy", "Mistake", "Blunder"]
+                        valid_cats = current_categories[1:]
+                        total_moves = len(valid_cats) if len(valid_cats) > 0 else 1
+                        
+                        counts = {c: valid_cats.count(c) for c in cats}
+                        percentages = {c: (counts[c] / total_moves) * 100 for c in cats}
+                        
+                        color_map = {
+                            "Best": "#d946ef", "Excellent": "#00e5ff", "Good": "#22c55e",
+                            "Inaccuracy": "#facc15", "Mistake": "#f97316", "Blunder": "#ec4899"
+                        }
+                        emoji_map = {"Best": "⭐", "Excellent": "🌟", "Good": "✅", "Inaccuracy": "⚠️", "Mistake": "❌", "Blunder": "💥"}
+                        
+                        html_bars = "<div style='display:flex; flex-direction:column; gap:12px;'>"
+                        
+                        for cat in reversed(cats):
+                            pct = percentages[cat]
+                            color = color_map[cat]
+                            emoji = emoji_map[cat]
+                            width_style = f"width:{pct}%;" if pct > 0 else "width:0%;"
+                            
+                            html_bars += f"<div style='display:flex; align-items:center;'>" \
+                                         f"<div style='width:110px; display:flex; align-items:center; gap:8px;'>" \
+                                         f"<span style='font-size:0.95rem;'>{emoji}</span>" \
+                                         f"<span style='color:#e6edf3; font-weight:700; font-size:0.85rem;'>{cat}</span>" \
+                                         f"</div>" \
+                                         f"<div style='width:50px; color:#c9d1d9; font-weight:700; font-size:0.8rem;'>{pct:.1f}%</div>" \
+                                         f"<div style='flex-grow:1; background:rgba(10, 15, 30, 0.6); border:1px solid rgba(255,255,255,0.03); border-radius:20px; height:14px; overflow:hidden;'>" \
+                                         f"<div style='{width_style} background:{color}; height:100%; border-radius:20px; box-shadow: 0 0 10px {color}, 0 0 20px {color}66; transition: width 0.5s ease-in-out;'></div>" \
+                                         f"</div>" \
+                                         f"</div>"
+                            
+                        html_bars += "</div>"
+                        st.markdown(html_bars, unsafe_allow_html=True)
+
+            # STOP THE SCRIPT
+            st.stop()
+        elif view_mode.startswith("▦"):
             subtab_eval, subtab_heat, subtab_quality, subtab_explain, subtab_browse = st.tabs([
                 "📈 Evaluation", "🔥 Heatmaps", "🎯 Move Quality", "📝 Explanations", "🔍 Browser"])
+                
         else:
             from contextlib import nullcontext
             subtab_eval = subtab_heat = subtab_quality = subtab_explain = subtab_browse = nullcontext()
@@ -2250,6 +2779,7 @@ with tab_review:
 
         # ---- Sub-tab 1: Evaluation ----
         with subtab_eval:
+            # (Your evaluation graph code starts here)
             with st.container(border=True):
                 # Header row
                 st.markdown(
@@ -2351,8 +2881,8 @@ with tab_review:
                             xanchor="left", yanchor="top",
                             showactive=True,
                             buttons=[
-                                dict(label="Show Dots", method="restyle", args=["mode", "lines+markers"]),
-                                dict(label="Hide Dots", method="restyle", args=["mode", "lines"]),
+                                dict(label="Show Dots", method="restyle", args=["mode", "lines+markers", [0, 1]]),
+                                dict(label="Hide Dots", method="restyle", args=["mode", "lines", [0, 1]]),
                             ],
                             bgcolor="rgba(10,20,45,0.75)",
                             bordercolor="rgba(96,165,250,0.35)",
@@ -2784,9 +3314,7 @@ with tab_review:
                     
                     fig_act.update_layout(
                         height=440,
-                        yaxis=dict(
-                            autorange="reversed",
-                            tickfont=dict(color="#c9d1d9", size=10),
+                        yaxis=dict(type="category", autorange="reversed", tickfont=dict(color="#c9d1d9", size=10),
                             showgrid=False,
                             constrain="domain",   # <--- ADDED
                             scaleanchor=None,     # <--- ADDED
@@ -2894,8 +3422,7 @@ with tab_review:
                 "Kings": chess.KING,
             }
 
-            w_grid, b_grid = piece_square_heatmap(
-                review_pgn, piece_type=piece_map[piece_choice])
+            w_grid, b_grid = piece_square_heatmap(review_pgn_used, piece_type=piece_map[piece_choice])
 
             if w_grid and b_grid:
                 row_labels = ["8", "7", "6", "5", "4", "3", "2", "1"]
@@ -2959,7 +3486,7 @@ with tab_review:
                         fig_w = go.Figure(data=go.Heatmap(
                             z=w_grid, x=col_labels, y=row_labels,
                             colorscale=white_scale,
-                            zmin=0, zmax=2,
+                            zmin=0, zmax=max(1, max(max(r) for r in w_grid)),
                             xgap=2, ygap=2,
                             hovertemplate="Square %{x}%{y}<br>"
                                           "White visits: %{z}<extra></extra>",
@@ -2974,10 +3501,7 @@ with tab_review:
                         fig_w.update_layout(
                             height=380,
                             yaxis=dict(
-                                autorange="reversed",
-                                tickmode="array",
-                                tickvals=list(range(8)),
-                                ticktext=["8", "7", "6", "5", "4", "3", "2", "1"],
+                                type="category", autorange="reversed",
                                 tickfont=dict(color="#c9d1d9", size=10),
                                 showgrid=True,
                                 gridcolor="rgba(125,143,168,0.18)",
@@ -3042,7 +3566,7 @@ with tab_review:
                         fig_b = go.Figure(data=go.Heatmap(
                             z=b_grid, x=col_labels, y=row_labels,
                             colorscale=black_scale,
-                            zmin=0, zmax=2,
+                            zmin=0, zmax=max(1, max(max(r) for r in b_grid)),
                             xgap=2, ygap=2,
                             hovertemplate="Square %{x}%{y}<br>"
                                           "Black visits: %{z}<extra></extra>",
@@ -3057,10 +3581,7 @@ with tab_review:
                         fig_b.update_layout(
                             height=380,
                             yaxis=dict(
-                                autorange="reversed",
-                                tickmode="array",
-                                tickvals=list(range(8)),
-                                ticktext=["8", "7", "6", "5", "4", "3", "2", "1"],
+                                type="category", autorange="reversed",
                                 tickfont=dict(color="#c9d1d9", size=10),
                                 showgrid=True,
                                 gridcolor="rgba(125,143,168,0.18)",
@@ -3222,7 +3743,6 @@ with tab_review:
                         var plot = document.querySelector('.js-plotly-plot');
                         if (!plot) return;
 
-                        // 1. Glow effect
                         var traces = plot.querySelectorAll('.scatterlayer .trace');
                         if (traces.length >= 2) {
                             var whiteLines = traces[0].querySelectorAll('.js-line');
@@ -3232,7 +3752,6 @@ with tab_review:
                             blackLines.forEach(function(l) { l.style.filter = 'drop-shadow(0 0 8px rgba(255, 42, 42, 0.8))'; });
                         }
 
-                        // 2. Fullscreen button
                         var bar = document.querySelector('.modebar');
                         if (!bar || bar.querySelector('.fs-btn')) return;
                         var btn = document.createElement('a');
@@ -3583,7 +4102,7 @@ with tab_review:
                 if (!plot) return;
                 var bars = plot.querySelectorAll('.barlayer .point path');
                 bars.forEach(function(b) {
-                    var fill = b.getAttribute('fill');
+                    var fill = b.getAttribute('fill') || '#ffffff';
                     b.style.filter = 'drop-shadow(0 0 10px ' + fill + ')';
                 });
             }, 500);
@@ -3608,7 +4127,7 @@ with tab_review:
                             showarrow=False, yshift=15,
                             bgcolor="rgba(10,20,45,0.9)", bordercolor="#00e5ff",
                             borderwidth=1, borderpad=4,
-                            font=dict(color="#00e5ff", size=12, weight="bold")
+                            font=dict(color="#00e5ff", size=12)
                         )]
                     )
                     _w_acc_html = pio.to_html(fig_acc_w, include_plotlyjs='cdn', full_html=False, config={'displayModeBar': False}, post_script=_post_acc)
@@ -3633,7 +4152,7 @@ with tab_review:
                             showarrow=False, yshift=15,
                             bgcolor="rgba(10,20,45,0.9)", bordercolor="#ff2a2a",
                             borderwidth=1, borderpad=4,
-                            font=dict(color="#ff2a2a", size=12, weight="bold")
+                            font=dict(color="#ff2a2a", size=12)
                         )]
                     )
                     _b_acc_html = pio.to_html(fig_acc_b, include_plotlyjs='cdn', full_html=False, config={'displayModeBar': False}, post_script=_post_acc)
@@ -3895,7 +4414,7 @@ with tab_review:
                     ),
                     text=black_mistakes, 
                     textposition="outside",
-                    textfont=dict(color="#e6edf3", size=12, weight="bold"),
+                    textfont=dict(color="#e6edf3", size=12),
                     hovertemplate="Black %{x}: %{y}<extra></extra>"
                 ))
 
@@ -3910,7 +4429,7 @@ with tab_review:
                     ),
                     text=white_mistakes, 
                     textposition="outside",
-                    textfont=dict(color="#e6edf3", size=12, weight="bold"),
+                    textfont=dict(color="#e6edf3", size=12),
                     hovertemplate="White %{x}: %{y}<extra></extra>"
                 ))
 
@@ -3959,7 +4478,7 @@ with tab_review:
                     // Apply glow to bar outlines
                     var bars = plot.querySelectorAll('.barlayer .point path');
                     bars.forEach(function(b) {
-                        var stroke = b.getAttribute('stroke');
+                        var stroke = b.getAttribute('stroke') || '';
                         if (stroke === '#ff2a2a' || stroke.indexOf('rgb(255, 42, 42)') > -1) {
                             b.style.filter = 'drop-shadow(0 0 8px rgba(255, 42, 42, 0.6))';
                         } else if (stroke === '#00e5ff' || stroke.indexOf('rgb(0, 229, 255)') > -1) {
@@ -4208,25 +4727,29 @@ with tab_review:
                             unsafe_allow_html=True)
                         
                         move_labels = ["Start"]
-                        for i, s in enumerate(sans[1:]):
+                        for i, s_ in enumerate(sans[1:]):
+                            n_ = i // 2 + 1
                             if i % 2 == 0:
-                                move_labels.append(f"🔵 {s}")
+                                move_labels.append(f"🔵 {n_}. {s_}")
                             else:
-                                move_labels.append(f"🔴 {s}")
-                                
-                        selected_move_label = st.radio(
-                            "Move Timeline",
-                            move_labels,
-                            index=st.session_state.current_review_ply,
-                            horizontal=True,
+                                move_labels.append(f"🔴 {n_}... {s_}")
+
+                        cur_ply = max(0, min(st.session_state.current_review_ply, len(fens) - 1))
+                        st.session_state.current_review_ply = cur_ply
+                        st.session_state.move_timeline_radio = move_labels[cur_ply]
+                        st.session_state.review_ply_slider = cur_ply
+
+                        def _on_radio():
+                            st.session_state.current_review_ply = move_labels.index(
+                                st.session_state.move_timeline_radio)
+
+                        def _on_slider():
+                            st.session_state.current_review_ply = st.session_state.review_ply_slider
+
+                        st.radio(
+                            "Move Timeline", move_labels, horizontal=True,
                             label_visibility="collapsed",
-                            key="move_timeline_radio"
-                        )
-                        
-                        new_ply = move_labels.index(selected_move_label)
-                        if new_ply != st.session_state.current_review_ply:
-                            st.session_state.current_review_ply = new_ply
-                            st.rerun()
+                            key="move_timeline_radio", on_change=_on_radio)
                             
                         st.markdown("<hr style='margin:10px 0;border-color:rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
 
@@ -4240,11 +4763,8 @@ with tab_review:
                         selected_ply = st.slider(
                             "Select ply (half-move)",
                             min_value=0, max_value=len(fens) - 1,
-                            value=st.session_state.current_review_ply,
-                            label_visibility="collapsed")
-                            
-                        if selected_ply != st.session_state.current_review_ply:
-                            st.session_state.current_review_ply = selected_ply
+                            label_visibility="collapsed",
+                            key="review_ply_slider", on_change=_on_slider)
 
                         # 7. Board
                         if selected_ply == 0:
@@ -4403,11 +4923,11 @@ with tab_review:
 
                     # Card 4: Prediction
                     current_fen = fens[selected_ply]
-                    cache_key = f"fen_analysis_{current_fen}"
+                    cache_key = f"fen_analysis_{current_fen}_{review_w_elo}_{review_b_elo}"
                     
                     if cache_key not in st.session_state:
                         with st.spinner("Analyzing position..."):
-                            st.session_state[cache_key] = predict_from_fen(current_fen, 2615, 2610)
+                            st.session_state[cache_key] = predict_from_fen(current_fen, review_w_elo or 2600, review_b_elo or 2600)
                             
                     inline_result = st.session_state[cache_key]
 
@@ -4519,72 +5039,6 @@ with tab_review:
                         )
                         
                         st.plotly_chart(fig_ks_mini, use_container_width=True, config={'displayModeBar': False})
-# ---------- Sidebar ----------
-st.sidebar.markdown(
-    """
-    <div style="
-        display:flex;
-        flex-direction:column;
-        align-items:center;
-        justify-content:center;
-        padding:24px 0 8px 0;
-        text-align:center;
-    ">
-        <div style="
-            font-size:96px;
-            line-height:1;
-            background: linear-gradient(135deg, #22c55e 0%, #a855f7 100%);
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-            filter: drop-shadow(0 0 18px rgba(34,197,94,0.55))
-                    drop-shadow(0 0 28px rgba(168,85,247,0.35));
-            font-family: 'Segoe UI Symbol', serif;
-        ">♔</div>
-        <div style="
-            margin-top:14px;
-            font-size:1.15rem;
-            font-weight:800;
-            letter-spacing:0.5px;
-            background: linear-gradient(90deg, #22c55e, #a855f7);
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-        ">CHESS PREDICTOR</div>
-        <div style="
-            margin-top:6px;
-            color:#7d8fa8;
-            font-size:0.78rem;
-            letter-spacing:0.3px;
-        ">ML-powered analysis</div>
-    </div>
 
-    <div style="
-        margin-top:20px;
-        padding:14px;
-        background:#0d1420;
-        border:1px solid #1f2b3d;
-        border-radius:12px;
-        color:#c9d1d9;
-        font-size:0.78rem;
-        line-height:1.6;
-    ">
-        <div style="
-            color:#22c55e;
-            font-weight:700;
-            font-size:0.72rem;
-            text-transform:uppercase;
-            letter-spacing:1px;
-            margin-bottom:8px;
-        ">About</div>
-        Built with <b style="color:#e6edf3;">python-chess</b>,
-        <b style="color:#e6edf3;">Stockfish 19</b>, and
-        <b style="color:#e6edf3;">scikit-learn</b>.<br><br>
-        Trained on <b style="color:#e6edf3;">5,000 master games</b>
-        (2600+ ELO).<br><br>
-        Test accuracy:
-        <b style="color:#22c55e;">~89%</b>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    elif graph_data and "error" in graph_data:
+        st.error(f"Could not analyze game: {graph_data['error']}")
